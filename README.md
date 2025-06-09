@@ -1,2 +1,4 @@
 # crypto-base-scannerr
- Smart money scanner for Binance coins
+bybit = ccxt.bybit({
+    'enableRateLimit': True
+}) 
