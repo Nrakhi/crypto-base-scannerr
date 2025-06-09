@@ -1,46 +1,53 @@
 import streamlit as st
-import ccxt, pandas as pd, numpy as np, time
+import pandas as pd
+import ccxt
+import datetime
 
-st.title("📊 Smart Money Base Scanner (Binance 1D)")
+st.set_page_config(page_title="Base Builder Scanner", layout="wide")
 
-@st.cache_data(ttl=3600)
-def get_data():
-    ex = ccxt.binance()
-    ex.load_markets()
-    symbols = [s for s in ex.symbols if s.endswith('/USDT') and 'UP/' not in s and 'DOWN/' not in s]
-    data = {}
-    for sym in symbols:
-        try:
-            ohlcv = ex.fetch_ohlcv(sym, '1d', limit=100)
-            df = pd.DataFrame(ohlcv, columns=['ts','open','high','low','close','vol'])
-            df['ts'] = pd.to_datetime(df['ts'], unit='ms')
-            data[sym] = df
-        except:
-            pass
-        time.sleep(0.05)
-    return data
+st.title("🔍 Base Builder Scanner - Bybit")
+st.caption("Scans coins forming a base (consolidation) with low volume on major support levels.")
 
-def check_base(df):
-    recent = df.tail(20)
-    price_range = (recent.high - recent.low).mean()
-    if price_range / recent.close.mean() > 0.03: return False
-    vol_thr = df.vol.quantile(0.2)
-    if recent.vol.mean() > vol_thr: return False
+# Initialize Bybit (no API key needed)
+bybit = ccxt.bybit({'enableRateLimit': True})
+
+# Get all Bybit USDT symbols
+markets = bybit.load_markets()
+symbols = [symbol for symbol in markets if symbol.endswith('/USDT') and 'SPOT' in markets[symbol]['type']]
+
+# Streamlit UI
+st.sidebar.subheader("Scanner Settings")
+days = st.sidebar.slider("Base period (days)", 5, 30, 15)
+volume_threshold = st.sidebar.slider("Max volume avg", 0, 5000000, 1000000)
+scan_button = st.sidebar.button("🔍 Scan Now")
+
+def is_consolidating(df, days, volume_threshold):
+    recent = df[-days:]
+    price_range = recent['high'].max() - recent['low'].min()
+    if price_range / recent['close'].mean() > 0.1:  # more than 10% range
+        return False
+    if recent['volume'].mean() > volume_threshold:
+        return False
     return True
 
-def detect_bos(df):
-    sw = (df.high.shift(1) < df.high) & (df.high.shift(-1) < df.high)
-    swings = df.loc[sw]
-    if len(swings) < 2: return False
-    return df.high.iloc[-1] > swings.high.iloc[-2]
+if scan_button:
+    results = []
+    st.info("Scanning... please wait ⏳")
 
-st.write("Tap 'Scan Now' to find coins in base + dead volume + BOS")
-if st.button("🔍 Scan Now"):
-    st.info("Scanning... please wait 90–120 seconds")
-    data = get_data()
-    results = [sym for sym, df in data.items() if len(df)>=50 and check_base(df) and detect_bos(df)]
+    for symbol in symbols:
+        try:
+            ohlcv = bybit.fetch_ohlcv(symbol, timeframe='1d', limit=days+5)
+            df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+            
+            if is_consolidating(df, days, volume_threshold):
+                results.append(symbol)
+        except Exception as e:
+            continue  # skip symbols that fail
+
     if results:
-        st.success(f"✅ Found {len(results)} coins:")
-        st.write(results)
+        st.success(f"✅ Found {len(results)} base-forming coins:")
+        for r in results:
+            st.write(f"• {r}")
     else:
-        st.warning("No matching coins found.")
+        st.warning("No suitable coins found with your settings.")
